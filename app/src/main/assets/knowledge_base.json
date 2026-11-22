@@ -1,0 +1,158 @@
+{
+  "organic": {
+    "title": "Organic waste",
+    "category": "Biodegradable",
+    "recyclable": false,
+    "steps": [
+      "Put it in the wet or green waste bin.",
+      "Compost it at home or in a community compost pit if you can.",
+      "Drain extra liquid before binning."
+    ],
+    "dont": [
+      "Don't mix it with plastic, glass or paper.",
+      "Don't wrap it in a plastic bag before binning."
+    ],
+    "why": "Food and plant waste rots into compost. In a landfill it makes methane, a greenhouse gas.",
+    "tip": "Banana, orange and mango peels and egg shells are good for compost. Cooked food and meat need a proper compost system."
+  },
+  "plastic_bottle_container": {
+    "title": "Plastic bottle or container",
+    "category": "Recyclable",
+    "recyclable": true,
+    "steps": [
+      "Empty it and rinse it quickly.",
+      "Crush it to save space.",
+      "Keep it dry and put it in the dry waste bin, or give it to your kabadiwala or collector.",
+      "Check the number in the triangle on the bottom for specific advice."
+    ],
+    "dont": [
+      "Don't recycle bottles that held pesticide, paint or chemicals. Treat them as hazardous.",
+      "Don't burn plastic."
+    ],
+    "why": "Most bottles are PET (1) or HDPE (2), and both can be recycled into new products.",
+    "tip": "The cap and the label are often different plastics. Ask your local collector whether to leave the cap on."
+  },
+  "plastic_film": {
+    "title": "Plastic film and packets",
+    "category": "Recyclable",
+    "recyclable": true,
+    "steps": [
+      "Empty it and shake out any food.",
+      "Keep it dry, and give it to your collector with the dry waste.",
+      "Collect packets in one bag so they don't fly away."
+    ],
+    "dont": [
+      "Don't burn it.",
+      "Don't throw it in drains or open areas."
+    ],
+    "why": "Thin plastic is hard to recycle, and many collectors take it only if it is clean and dry.",
+    "tip": "Using fewer carry bags and packets matters more than recycling them. Check with your local collector, since acceptance varies."
+  },
+  "paper_cardboard": {
+    "title": "Paper and cardboard",
+    "category": "Recyclable",
+    "recyclable": true,
+    "steps": [
+      "Keep it dry and clean.",
+      "Flatten boxes.",
+      "Give it to your kabadiwala or put it in the dry waste bin."
+    ],
+    "dont": [
+      "Don't recycle paper that is wet or covered in food or grease.",
+      "Don't mix it with wet waste."
+    ],
+    "why": "Clean paper and cardboard can be pulped and made into new paper many times.",
+    "tip": "Remove tape and staples if you can. Greasy pizza boxes can go with the wet waste."
+  },
+  "glass": {
+    "title": "Glass",
+    "category": "Recyclable",
+    "recyclable": true,
+    "steps": [
+      "Rinse it and take off the lids.",
+      "Put it in the dry waste or give it to your collector.",
+      "Wrap broken glass in newspaper and mark it before handing it over."
+    ],
+    "dont": [
+      "Don't put broken glass loose in the bin. It can hurt waste workers.",
+      "Don't mix window glass, mirrors or bulbs with bottles and jars."
+    ],
+    "why": "Glass bottles and jars can be recycled again and again without losing quality.",
+    "tip": "Bottles and jars can often be reused at home before you recycle them."
+  },
+  "metal": {
+    "title": "Metal",
+    "category": "Recyclable",
+    "recyclable": true,
+    "steps": [
+      "Empty it and rinse it.",
+      "Put it in the dry waste or give it to your kabadiwala.",
+      "Crush cans to save space."
+    ],
+    "dont": [
+      "Don't recycle aerosol cans that still have contents. See the hazardous advice.",
+      "Don't put sharp edges loose in the bin."
+    ],
+    "why": "Metals like steel and aluminium recycle well and save a lot of energy compared to making new metal.",
+    "tip": "Scrap metal has resale value, so collectors usually take it."
+  },
+  "ewaste": {
+    "title": "Electronic waste",
+    "category": "E-Waste",
+    "recyclable": true,
+    "steps": [
+      "Don't put it in the normal bin.",
+      "Take it to an authorised e-waste collection point, or to a store or brand take-back programme.",
+      "Remove personal data from phones, laptops and drives first."
+    ],
+    "dont": [
+      "Don't break open or burn electronics.",
+      "Don't hand it to unauthorised scrap dealers who burn parts for metals."
+    ],
+    "why": "Electronics contain useful metals and also toxic materials such as lead and mercury.",
+    "tip": "Check with the shop where you bought it. Many brands take old devices back.",
+    "warning": "Batteries can leak or catch fire. Don't crush or burn them, and tape the ends of lithium cells."
+  },
+  "hazardous": {
+    "title": "Hazardous waste",
+    "category": "Hazardous",
+    "recyclable": false,
+    "steps": [
+      "Keep it separate from the other waste.",
+      "Keep it in a closed container, away from children and pets.",
+      "Take it to an authorised hazardous waste or collection point, or ask your municipality.",
+      "For medicines, ask a pharmacy or a hospital."
+    ],
+    "dont": [
+      "Don't pour chemicals or medicines down the drain or on the ground.",
+      "Don't burn it.",
+      "Don't mix different chemicals."
+    ],
+    "why": "These items can poison people, animals and water, or can injure waste workers.",
+    "tip": "Broken thermometers, tube lights and CFL bulbs contain mercury. Don't touch the contents. Ventilate the room and use gloves."
+  },
+  "unsure": {
+    "title": "Not sure",
+    "category": "Unknown",
+    "recyclable": null,
+    "steps": [
+      "Take another photo in good light with the item in the middle of the frame.",
+      "Or pick the type yourself from the list.",
+      "If you still don't know, ask your local waste collector."
+    ],
+    "dont": [
+      "Don't guess for chemicals, batteries or medicines. Treat them as hazardous."
+    ],
+    "why": "The app is only confident about the kinds of waste it was trained on.",
+    "tip": "When in doubt, keep it out of the regular bin and ask."
+  },
+  "plastic_codes": {
+    "1": {"name": "PET", "note": "Water and cold drink bottles. Widely recycled."},
+    "2": {"name": "HDPE", "note": "Shampoo, detergent and milk bottles. Widely recycled."},
+    "3": {"name": "PVC", "note": "Pipes and some packaging. Hard to recycle. Ask your collector."},
+    "4": {"name": "LDPE", "note": "Bags and films. Accepted in some places only."},
+    "5": {"name": "PP", "note": "Tubs, lunch boxes and caps. Often recycled."},
+    "6": {"name": "PS", "note": "Thermocol and disposable cups. Rarely recycled."},
+    "7": {"name": "Other", "note": "Mixed plastics. Usually not recycled."}
+  }
+}
