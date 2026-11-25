@@ -272,7 +272,9 @@ dependencies {
     implementation("androidx.camera:camera-view:1.3.0")
     implementation("com.google.mlkit:object-detection:17.0.2")
     implementation("androidx.constraintlayout:constraintlayout:2.2.0")
-    implementation("com.facebook.fbjni:fbjni:0.5.1")
+    implementation(files("libs/executorch.aar"))
+    implementation("com.facebook.fbjni:fbjni:0.7.0")
+    implementation("com.facebook.soloader:nativeloader:0.10.5")
     implementation("com.google.code.gson:gson:2.8.6")
     implementation("com.halilibo.compose-richtext:richtext-commonmark:1.0.0-alpha02")
     implementation("com.halilibo.compose-richtext:richtext-ui-material3:1.0.0-alpha02")
@@ -286,7 +288,9 @@ dependencies {
         }
         implementation(files(localAar))
     } else {
-        implementation("org.pytorch:executorch-android:1.1.0")
+        implementation(files("libs/executorch.aar"))
+        implementation("com.facebook.fbjni:fbjni:0.7.0")
+        implementation("com.facebook.soloader:nativeloader:0.10.5")
         // https://mvnrepository.com/artifact/org.pytorch/executorch-android-qnn
         // Uncomment this to enable QNN
         // implementation("org.pytorch:executorch-android-qnn:1.1.0")

@@ -181,6 +181,14 @@ private fun DrawScope.drawIcon(kind: String, c: Color) {
             drawPath(p, c, style = Stroke(width = 2.2f, cap = StrokeCap.Round, join = StrokeJoin.Round))
         }
 
+        "flash" -> {
+            val bolt = Path().apply {
+                moveTo(13f, 2.5f); lineTo(5f, 13.5f); lineTo(11f, 13.5f)
+                lineTo(10f, 21.5f); lineTo(19f, 10f); lineTo(13f, 10f); close()
+            }
+            drawPath(bolt, c, style = stroke)
+        }
+
         "stop" -> {
             drawRoundRect(c, Offset(6f, 6f), Size(12f, 12f), CornerRadius(2.5f))
         }

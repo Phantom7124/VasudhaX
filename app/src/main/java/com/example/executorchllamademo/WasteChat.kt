@@ -54,7 +54,12 @@ import org.pytorch.executorch.extension.llm.LlmModule
 data class ChatMessage(val text: String, val fromUser: Boolean)
 
 /** What the chat was opened for: the scanned item's info (empty for a general chat). */
-data class ChatRequest(val context: String, val title: String, val category: String)
+data class ChatRequest(
+    val context: String,
+    val title: String,
+    val category: String,
+    val firstQuestion: String = ""
+)
 
 /**
  * Runs the Llama model for the chat screen. One instance lives for the whole app session,
@@ -126,8 +131,16 @@ class ChatEngine {
         } else {
             question
         }
-        val prompt = (if (firstTurn) settings.getFormattedSystemPrompt() else "") +
-                settings.getFormattedUserPrompt(text, false)
+        // In Hindi mode the assistant is told to answer in Hindi.
+        val activeSettings = if (Lang.hindi) ModuleSettings(
+            systemPrompt = ChatLauncher.SYSTEM_PROMPT +
+                    " Always reply in Hindi, written in Devanagari script.",
+            userPrompt = PromptFormat.getUserPromptTemplate(ModelType.LLAMA_3),
+            modelType = ModelType.LLAMA_3,
+            backendType = BackendType.XNNPACK
+        ) else settings
+        val prompt = (if (firstTurn) activeSettings.getFormattedSystemPrompt() else "") +
+                activeSettings.getFormattedUserPrompt(text, false)
         firstTurn = false
         sawHeader = false
 
@@ -225,7 +238,7 @@ fun ChatScreen(
                     val i = messages.lastIndex
                     if (i >= 0 && !messages[i].fromUser && messages[i].text.isBlank()) {
                         messages[i] = messages[i].copy(
-                            text = "Sorry, I couldn't answer that. Try again or tap New chat."
+                            text = tr("Sorry, I couldn't answer that. Try again or tap New chat.", "माफ़ कीजिए, मैं इसका जवाब नहीं दे सका। दोबारा कोशिश करें या नई चैट दबाएँ।")
                         )
                     }
                     generating = false
@@ -234,10 +247,23 @@ fun ChatScreen(
         )
     }
 
+    // Questions typed in the "Something else" box are sent automatically once the model is ready.
+    LaunchedEffect(ready, request) {
+        if (ready && request.firstQuestion.isNotEmpty() && messages.isEmpty()) send(request.firstQuestion)
+    }
+
     val suggestions = if (request.context.isNotEmpty()) {
-        listOf("How do I dispose of this?", "Can this be reused?", "Why does this matter?")
+        listOf(
+            tr("How do I dispose of this?", "इसे कैसे फेंकूँ?"),
+            tr("Can this be reused?", "क्या इसे दोबारा इस्तेमाल कर सकते हैं?"),
+            tr("Why does this matter?", "यह क्यों ज़रूरी है?")
+        )
     } else {
-        listOf("How do I recycle plastic bottles?", "What is e-waste?", "Where should I throw old batteries?")
+        listOf(
+            tr("How do I recycle plastic bottles?", "प्लास्टिक की बोतलें कैसे रीसायकल करूँ?"),
+            tr("What is e-waste?", "ई-कचरा क्या है?"),
+            tr("Where should I throw old batteries?", "पुरानी बैटरियाँ कहाँ फेंकूँ?")
+        )
     }
 
     Column(
@@ -270,7 +296,7 @@ fun ChatScreen(
                 }
                 Spacer(Modifier.width(10.dp))
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Ask the assistant", style = MaterialTheme.typography.titleMedium)
+                    Text(tr("Ask the assistant", "सहायक से पूछें"), style = MaterialTheme.typography.titleMedium)
                     Text(
                         request.title,
                         style = MaterialTheme.typography.labelMedium,
@@ -282,7 +308,7 @@ fun ChatScreen(
                     engine.newConversation()
                     messages.clear()
                     generating = false
-                }) { Text("New chat") }
+                }) { Text(tr("New chat", "नई चैट")) }
             }
         }
 
@@ -310,7 +336,7 @@ fun ChatScreen(
                 CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                 Spacer(Modifier.width(10.dp))
                 Text(
-                    "Loading the assistant. The first time takes a few seconds.",
+                    tr("Loading the assistant. The first time takes a few seconds.", "सहायक लोड हो रहा है। पहली बार में कुछ सेकंड लगते हैं।"),
                     style = MaterialTheme.typography.bodyMedium,
                     color = Color(0xFF55605A)
                 )
@@ -336,11 +362,11 @@ fun ChatScreen(
                     Icon24(if (request.category.isEmpty()) "chat" else categoryIcon(request.category), Color(0xFF1B6B43), 28.dp)
                 }
                 Text(
-                    if (request.context.isNotEmpty()) "Ask anything about this item" else "Ask me about waste and recycling",
+                    if (request.context.isNotEmpty()) tr("Ask anything about this item", "इस चीज़ के बारे में कुछ भी पूछें") else tr("Ask me about waste and recycling", "कचरे और रीसायकलिंग के बारे में पूछें"),
                     style = MaterialTheme.typography.titleLarge
                 )
                 Text(
-                    "Everything runs on your phone, with no internet needed.",
+                    tr("Everything runs on your phone, with no internet needed.", "सब कुछ आपके फ़ोन पर चलता है, इंटरनेट की ज़रूरत नहीं।"),
                     style = MaterialTheme.typography.bodyMedium,
                     color = Color(0xFF55605A)
                 )
@@ -388,7 +414,7 @@ fun ChatScreen(
                     value = input,
                     onValueChange = { input = it },
                     modifier = Modifier.weight(1f),
-                    placeholder = { Text("Ask a question") },
+                    placeholder = { Text(tr("Ask a question", "सवाल पूछें")) },
                     shape = RoundedCornerShape(24.dp),
                     maxLines = 3,
                     enabled = ready
@@ -432,7 +458,7 @@ private fun Bubble(msg: ChatMessage, thinking: Boolean) {
                 .padding(horizontal = 14.dp, vertical = 10.dp)
         ) {
             Text(
-                if (thinking) "Thinking…" else msg.text,
+                if (thinking) tr("Thinking…", "सोच रहा हूँ…") else msg.text,
                 color = if (user) Color.White else Color(0xFF1B1F1D),
                 style = MaterialTheme.typography.bodyMedium
             )

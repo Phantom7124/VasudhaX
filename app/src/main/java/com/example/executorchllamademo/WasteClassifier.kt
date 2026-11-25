@@ -34,6 +34,11 @@ class WasteClassifier(context: Context) {
     }
 
     fun classify(bitmap: Bitmap): Result {
+        android.util.Log.d(
+            "WasteInput",
+            "Bitmap=${bitmap.width}x${bitmap.height}, " +
+                    "Hash=${bitmap.hashCode()}"
+        )
         val input = ImageTensor.fromBitmap(bitmap)
         val start = SystemClock.elapsedRealtime()
         val logits = module.forward(EValue.from(input))[0].toTensor().dataAsFloatArray

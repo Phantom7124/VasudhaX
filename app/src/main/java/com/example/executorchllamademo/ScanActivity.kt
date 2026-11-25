@@ -34,6 +34,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -75,10 +78,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -95,7 +102,7 @@ import androidx.core.view.WindowCompat
 const val CONFIDENCE_MIN = 0.35f
 
 // Shows the technical class name and confidence on the result. Set to false for the demo video.
-const val SHOW_DEBUG = false
+const val SHOW_DEBUG = true
 
 // The 8 trained classes map to the organisers' 4 categories. Only the category is shown to the user.
 val CATEGORY_OF = mapOf(
@@ -125,7 +132,13 @@ fun categoryEmoji(category: String): String = when (category) {
     else -> "❓"
 }
 
-data class ScanItem(val bitmap: Bitmap, val result: WasteClassifier.Result, val info: WasteInfo)
+// key = the item type the advice is for (glass, metal...). Empty when only the category is known.
+data class ScanItem(
+    val bitmap: Bitmap,
+    val result: WasteClassifier.Result,
+    val info: WasteInfo,
+    val key: String = ""
+)
 
 class ScanActivity : ComponentActivity() {
 
@@ -159,28 +172,12 @@ class ScanActivity : ComponentActivity() {
 
     /** Finds every item in a photo and classifies each one. Must run off the main thread. */
     private fun classifyAll(bmp: Bitmap): List<ScanItem> {
-        val items = ArrayList<ScanItem>()
-        try {
-            val objs = Tasks.await(stillDetector.process(InputImage.fromBitmap(bmp, 0)))
-            for (o in objs) {
-                val r = o.boundingBox
-                val pad = 0.08f * maxOf(r.width(), r.height())
-                val l = maxOf(0f, r.left - pad).toInt()
-                val t = maxOf(0f, r.top - pad).toInt()
-                val rr = minOf(bmp.width.toFloat(), r.right + pad).toInt()
-                val bb = minOf(bmp.height.toFloat(), r.bottom + pad).toInt()
-                if (rr - l < 48 || bb - t < 48) continue
-                items.add(classify(Bitmap.createBitmap(bmp, l, t, rr - l, bb - t)))
-            }
-        } catch (e: Exception) {
-            // fall back to the whole photo below
-        }
-        if (items.isEmpty()) items.add(classify(bmp))
-        return items
+        return listOf(classify(bmp))
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Lang.init(this)
 
         // Draw behind the status and navigation bars for a modern full-screen look.
         WindowCompat.setDecorFitsSystemWindows(window, false)
@@ -188,7 +185,7 @@ class ScanActivity : ComponentActivity() {
         window.navigationBarColor = android.graphics.Color.TRANSPARENT
         val controller = WindowCompat.getInsetsController(window, window.decorView)
         controller.isAppearanceLightStatusBars = false
-        controller.isAppearanceLightNavigationBars = true
+        controller.isAppearanceLightNavigationBars = false
 
         // Load the classifier in the background so the first scan is fast.
         Thread {
@@ -216,8 +213,18 @@ class ScanActivity : ComponentActivity() {
             val c = classifier ?: WasteClassifier(this).also { classifier = it }
             c.classify(bmp)
         }
-        val key = if (r.confidence >= CONFIDENCE_MIN) (CATEGORY_OF[r.label] ?: "unsure") else "unsure"
-        return ScanItem(bmp, r, KnowledgeBase.get(this, key))
+        val known = r.confidence >= CONFIDENCE_MIN && CATEGORY_OF.containsKey(r.label)
+        // TEMPORARY DEBUG LOG
+        android.util.Log.d(
+            "WasteDebug",
+            "Label=${r.label}, Confidence=${r.confidence}, " +
+                    "Known=${CATEGORY_OF.containsKey(r.label)}, " +
+                    "Accepted=$known"
+        )
+        val info = KnowledgeBase.get(this, if (known) r.label else "unsure")
+        return ScanItem(bmp, r, info, if (known) r.label else "")
+
+
     }
 
     private fun downscale(bmp: Bitmap, maxSide: Int): Bitmap {
@@ -254,7 +261,12 @@ class ScanActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun CameraPreview(modifier: Modifier, analyzer: ImageAnalysis.Analyzer?, onReady: (ImageCapture) -> Unit) {
+    private fun CameraPreview(
+        modifier: Modifier,
+        analyzer: ImageAnalysis.Analyzer?,
+        onCamera: (androidx.camera.core.Camera) -> Unit,
+        onReady: (ImageCapture) -> Unit
+    ) {
         AndroidView(
             modifier = modifier,
             factory = { c ->
@@ -284,9 +296,10 @@ class ScanActivity : ComponentActivity() {
                             }
                             previewView.viewPort?.let { group.setViewPort(it) }
                             provider.unbindAll()
-                            provider.bindToLifecycle(
+                            val cam = provider.bindToLifecycle(
                                 this@ScanActivity, CameraSelector.DEFAULT_BACK_CAMERA, group.build()
                             )
+                            onCamera(cam)
                             onReady(capture)
                         } catch (e: Exception) {
                             // the screen shows a message if no camera is ready
@@ -310,6 +323,8 @@ class ScanActivity : ComponentActivity() {
         var chat by remember { mutableStateOf<ChatRequest?>(null) }
         var tab by remember { mutableStateOf("home") }
         val generalMessages = remember { mutableStateListOf<ChatMessage>() }
+        var camera by remember { mutableStateOf<androidx.camera.core.Camera?>(null) }
+        var torch by remember { mutableStateOf(false) }
         var group by remember { mutableStateOf<List<ScanItem>>(emptyList()) }
         var live by remember { mutableStateOf(DetFrame(1, 1, emptyList())) }
         val analyzer = remember { LiveAnalyzer({ classifyCrop(it) }, { live = it }) }
@@ -330,7 +345,7 @@ class ScanActivity : ComponentActivity() {
         }
 
         fun handleBitmap(bmp: Bitmap) {
-            message = "Analysing..."
+            message = tr("Analysing...", "जाँच रहे हैं...")
             Thread {
                 try {
                     val found = classifyAll(bmp)
@@ -383,8 +398,21 @@ class ScanActivity : ComponentActivity() {
                 item = current,
                 group = group,
                 onPick = { selected = it },
-                onCorrect = { cat ->
-                    val fixed = ScanItem(current.bitmap, current.result, KnowledgeBase.get(ctx, cat))
+                onOther = { text ->
+                    generalMessages.clear()
+                    chat = ChatRequest(
+                        "", text, "",
+                        tr(
+                            "I have this item: $text. Which category is it: Biodegradable, Recyclable, E-Waste or Hazardous? How should I dispose of it in India?",
+                            "मेरे पास यह चीज़ है: $text। यह किस प्रकार का कचरा है: जैव-अपघटनीय, पुनर्चक्रण योग्य, ई-कचरा या खतरनाक? इसे भारत में कैसे फेंकूँ?"
+                        )
+                    )
+                },
+                onCorrect = { cat, key ->
+                    val fixed = ScanItem(
+                        current.bitmap, current.result,
+                        KnowledgeBase.get(ctx, if (key.isNotEmpty()) key else cat), key
+                    )
                     group = group.map { if (it === current) fixed else it }
                     selected = fixed
                 },
@@ -400,7 +428,14 @@ class ScanActivity : ComponentActivity() {
                 Box(modifier = Modifier.weight(1f)) {
                     when (tab) {
                         "home" -> HomeScreen(
+                            scans = scans,
                             onScan = { tab = "scan" },
+                            onUpload = {
+                                picker.launch(
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                )
+                            },
+                            onOpenScan = { selected = it },
                             onLearn = {
                                 generalMessages.clear()
                                 chat = it
@@ -412,6 +447,12 @@ class ScanActivity : ComponentActivity() {
                             message = message,
                             analyzer = analyzer,
                             live = live,
+                            torchOn = torch,
+                            onTorch = {
+                                torch = !torch
+                                camera?.cameraControl?.enableTorch(torch)
+                            },
+                            onCamera = { camera = it; torch = false },
                             onReady = { imageCapture = it },
                             onOpenScan = { selected = it },
                             onGallery = {
@@ -444,20 +485,21 @@ class ScanActivity : ComponentActivity() {
 
     @Composable
     private fun WasteNavBar(tab: String, onTab: (String) -> Unit) {
-        NavigationBar(containerColor = Color.White) {
+        NavigationBar(containerColor = Color(0xFF0E1412)) {
             listOf(
-                Triple("home", "home", "Home"),
-                Triple("scan", "camera", "Scan"),
-                Triple("assistant", "chat", "Assistant")
+                Triple("home", "home", tr("Home", "होम")),
+                Triple("scan", "camera", tr("Scan", "स्कैन")),
+                Triple("assistant", "chat", tr("Assistant", "सहायक"))
             ).forEach { (key, emoji, label) ->
                 NavigationBarItem(
                     selected = tab == key,
                     onClick = { onTab(key) },
-                    icon = { Icon24(emoji, if (tab == key) Color(0xFF14532D) else Color(0xFF6B7F73), 24.dp) },
+                    icon = { Icon24(emoji, if (tab == key) HomeMint else HomeMuted, 24.dp) },
                     label = { Text(label) },
                     colors = NavigationBarItemDefaults.colors(
-                        indicatorColor = Color(0xFFD3EADB),
-                        selectedTextColor = Color(0xFF14532D)
+                        indicatorColor = Color(0xFF1F3A2F),
+                        selectedTextColor = HomeMint,
+                        unselectedTextColor = HomeMuted
                     )
                 )
             }
@@ -473,163 +515,160 @@ class ScanActivity : ComponentActivity() {
         message: String?,
         analyzer: ImageAnalysis.Analyzer,
         live: DetFrame,
+        torchOn: Boolean,
+        onTorch: () -> Unit,
+        onCamera: (androidx.camera.core.Camera) -> Unit,
         onReady: (ImageCapture) -> Unit,
         onOpenScan: (ScanItem) -> Unit,
         onGallery: () -> Unit,
         onCapture: () -> Unit
     ) {
-        val transition = rememberInfiniteTransition(label = "scan")
-        val sweep by transition.animateFloat(
-            initialValue = 0f,
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(2200, easing = LinearEasing),
-                repeatMode = RepeatMode.Reverse
-            ),
-            label = "sweep"
-        )
+        val haptic = LocalHapticFeedback.current
 
         Box(modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black)) {
+            .background(HomeBg)) {
 
             if (hasCamera) {
-                CameraPreview(Modifier.fillMaxSize(), analyzer, onReady)
+                CameraPreview(Modifier.fillMaxSize(), analyzer, onCamera, onReady)
             } else {
                 Text(
-                    "Camera permission is needed to scan.\nYou can still pick a photo from the gallery.",
-                    color = Color.White,
+                    tr("Camera permission is needed to scan.\nYou can still choose a photo from the gallery.", "स्कैन करने के लिए कैमरे की अनुमति चाहिए।\nआप गैलरी से फ़ोटो चुन सकते हैं।"),
+                    color = HomeText,
                     modifier = Modifier
                         .align(Alignment.Center)
                         .padding(32.dp)
                 )
             }
 
-            // Coloured squares around every item the app recognises
+            // Boxes around the items the app recognises
             if (hasCamera) DetectionOverlay(live)
 
-            // Legend
-            Row(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .statusBarsPadding()
-                    .padding(top = 78.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                for (cat in listOf("Biodegradable", "Recyclable", "E-Waste", "Hazardous")) {
-                    Row(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(50))
-                            .background(Color(0x99000000))
-                            .padding(horizontal = 8.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(Modifier.size(8.dp).clip(CircleShape).background(boxColor(cat)))
-                        Spacer(Modifier.width(5.dp))
-                        Text(cat, color = Color.White, fontSize = 10.sp)
-                    }
-                }
-            }
-
-            // Top bar
+            // Top: title and a live status
             Column(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .fillMaxWidth()
-                    .background(Brush.verticalGradient(listOf(Color(0xCC000000), Color.Transparent)))
+                    .background(Brush.verticalGradient(listOf(Color(0xCC0B100E), Color.Transparent)))
                     .statusBarsPadding()
                     .padding(horizontal = 20.dp, vertical = 16.dp)
             ) {
+                Text(tr("Scan", "स्कैन"), color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
                 Text(
-                    "Scan waste",
-                    color = Color.White,
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    "Point at items. Boxes appear on their own",
-                    color = Color(0xCCFFFFFF),
-                    style = MaterialTheme.typography.bodyMedium
+                    when (live.boxes.size) {
+                        0 -> tr("Looking for items...", "वस्तुएँ खोज रहे हैं...")
+                        1 -> tr("1 item found", "1 वस्तु मिली")
+                        else -> tr("${live.boxes.size} items found", "${live.boxes.size} वस्तुएँ मिलीं")
+                    },
+                    color = if (live.boxes.isEmpty()) Color(0xB3FFFFFF) else HomeMint,
+                    fontSize = 13.sp
                 )
             }
 
-            // Bottom sheet
-            Surface(
+            // Bottom controls
+            Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .fillMaxWidth(),
-                shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
-                color = Color.White,
-                shadowElevation = 16.dp
+                    .fillMaxWidth()
+                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xEE0B100E))))
+                    .padding(top = 36.dp, bottom = 22.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                Column(
-                    modifier = Modifier
-                        .padding(horizontal = 20.dp, vertical = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
-                ) {
-                    message?.let {
-                        Text(it, color = MaterialTheme.colorScheme.error)
-                    }
+                message?.let {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(Color(0xCC141B18))
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                    ) { Text(it, color = Color(0xFFFFB4A9), fontSize = 13.sp) }
+                }
 
-                    if (scans.isNotEmpty()) {
-                        Text(
-                            "This session: ${scans.size} item" + if (scans.size == 1) "" else "s",
-                            style = MaterialTheme.typography.titleSmall
-                        )
-                        val counts = scans.groupingBy { it.info.category }.eachCount().toList()
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            itemsIndexed(counts) { _, pair ->
-                                Chip(
-                                    text = pair.first + "  " + pair.second,
-                                    color = categoryColor(pair.first)
-                                )
-                            }
-                        }
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            itemsIndexed(scans) { _, s ->
-                                Box(
-                                    modifier = Modifier
-                                        .size(52.dp)
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(categoryColor(s.info.category))
-                                        .padding(2.5.dp)
-                                        .clickable { onOpenScan(s) }
-                                ) {
-                                    Image(
-                                        bitmap = s.bitmap.asImageBitmap(),
-                                        contentDescription = null,
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .clip(RoundedCornerShape(10.dp)),
-                                        contentScale = ContentScale.Crop
-                                    )
-                                }
-                            }
-                        }
-                    }
-
+                // Last scan, tap to reopen it
+                scans.lastOrNull()?.let { last ->
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(Color(0xE6141B18))
+                            .clickable { onOpenScan(last) }
+                            .padding(start = 6.dp, end = 16.dp, top = 6.dp, bottom = 6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        RoundAction(icon = "gallery", label = "Gallery", onClick = onGallery)
-
-                        // Capture button: ring with a filled centre
-                        Box(
+                        Image(
+                            bitmap = last.bitmap.asImageBitmap(),
+                            contentDescription = null,
                             modifier = Modifier
-                                .size(78.dp)
-                                .border(4.dp, MaterialTheme.colorScheme.primary, CircleShape)
-                                .padding(7.dp)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.primary)
-                                .clickable { onCapture() }
+                                .size(34.dp)
+                                .clip(CircleShape),
+                            contentScale = ContentScale.Crop
                         )
-
-                        Spacer(Modifier.size(52.dp))
+                        Spacer(Modifier.width(10.dp))
+                        Text(tr("Last scan", "पिछला स्कैन"), color = HomeMuted, fontSize = 13.sp)
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            catLabel(last.info.category),
+                            color = boxColor(last.info.category),
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
                     }
                 }
+
+                // Colour key
+                Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    for (cat in listOf("Biodegradable", "Recyclable", "E-Waste", "Hazardous")) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(Modifier.size(8.dp).clip(CircleShape).background(boxColor(cat)))
+                            Spacer(Modifier.width(5.dp))
+                            Text(catLabel(cat), color = Color(0xCCFFFFFF), fontSize = 11.sp)
+                        }
+                    }
+                }
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 36.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    SideButton("gallery", tr("Gallery", "गैलरी"), false, onGallery)
+
+                    // Shutter: white ring with a filled centre
+                    Box(
+                        modifier = Modifier
+                            .size(78.dp)
+                            .border(4.dp, Color.White, CircleShape)
+                            .padding(7.dp)
+                            .clip(CircleShape)
+                            .background(Color.White)
+                            .clickable {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onCapture()
+                            }
+                    )
+
+                    SideButton("flash", if (torchOn) tr("Light on", "लाइट चालू") else tr("Light", "लाइट"), torchOn, onTorch)
+                }
             }
+        }
+    }
+
+    @Composable
+    private fun SideButton(icon: String, label: String, active: Boolean, onClick: () -> Unit) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(56.dp)) {
+            Box(
+                modifier = Modifier
+                    .size(52.dp)
+                    .clip(CircleShape)
+                    .background(if (active) HomeMint else Color(0xE61B2521))
+                    .clickable { onClick() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon24(icon, if (active) Color(0xFF0B2A1D) else Color.White, 24.dp)
+            }
+            Spacer(Modifier.height(5.dp))
+            Text(label, color = Color(0xCCFFFFFF), fontSize = 11.sp)
         }
     }
 
@@ -665,294 +704,435 @@ class ScanActivity : ComponentActivity() {
 
     // ---------------------------------------------------------------- result screen
 
+    private fun binOf(category: String): String = when (category) {
+        "Biodegradable" -> tr("Green bin", "हरा डिब्बा")
+        "Recyclable" -> tr("Blue bin", "नीला डिब्बा")
+        "E-Waste" -> tr("E-waste drop-off point", "ई-कचरा संग्रह केंद्र")
+        "Hazardous" -> tr("Hazardous waste collection", "खतरनाक कचरा संग्रह")
+        else -> tr("Not sure yet", "अभी पक्का नहीं")
+    }
+
+    @Composable
+    private fun DarkCard(content: @Composable ColumnScope.() -> Unit) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(20.dp))
+                .background(HomeSurface)
+                .border(1.dp, HomeOutline, RoundedCornerShape(20.dp))
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            content = content
+        )
+    }
+
+    @Composable
+    private fun SectionHeader(icon: String, title: String, tint: Color, hint: String? = null) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon24(icon, tint, 20.dp)
+            Spacer(Modifier.width(8.dp))
+            Text(title, color = HomeText, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            if (hint != null) {
+                Spacer(Modifier.weight(1f))
+                Text(hint, color = HomeMuted, fontSize = 12.sp)
+            }
+        }
+    }
+
     @Composable
     private fun ResultScreen(
         item: ScanItem,
         group: List<ScanItem>,
         onPick: (ScanItem) -> Unit,
-        onCorrect: (String) -> Unit,
+        onCorrect: (String, String) -> Unit,
+        onOther: (String) -> Unit,
         onBack: () -> Unit,
         onScanAnother: () -> Unit,
         onAsk: () -> Unit
     ) {
-        val info = item.info
-        val accent = categoryColor(info.category)
+        val info = KnowledgeBase.get(LocalContext.current, item.key.ifEmpty { item.info.category })
+        val accent = boxColor(info.category)
         val confident = item.result.confidence >= CONFIDENCE_MIN
+        val pct = (item.result.confidence * 100).toInt()
+        val done = remember(info) {
+            mutableStateListOf<Boolean>().apply { repeat(info.steps.size) { add(false) } }
+        }
 
-        Box(modifier = Modifier.fillMaxSize()) {
+        var otherOpen by remember { mutableStateOf(false) }
+        var otherText by remember { mutableStateOf("") }
+
+        Box(modifier = Modifier
+            .fillMaxSize()
+            .background(HomeBg)
+            .imePadding()) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .verticalScroll(rememberScrollState())
+                    .statusBarsPadding()
+                    .padding(horizontal = 18.dp)
+                    .padding(top = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(18.dp)
             ) {
-                // Photo with a dark fade and a back button
-                Box {
-                    Image(
-                        bitmap = item.bitmap.asImageBitmap(),
-                        contentDescription = null,
+                // Back and title
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(HomeSurface2)
+                            .clickable { onBack() },
+                        contentAlignment = Alignment.Center
+                    ) { Icon24("back", HomeText, 20.dp) }
+                    Spacer(Modifier.width(14.dp))
+                    Text(tr("Result", "परिणाम"), color = HomeText, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                }
+
+                // Several items in one photo
+                if (group.size > 1) {
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        itemsIndexed(group) { i, g ->
+                            val sel = g === item
+                            val c = boxColor(g.info.category)
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(50))
+                                    .background(if (sel) c else HomeSurface2)
+                                    .clickable { onPick(g) }
+                                    .padding(horizontal = 14.dp, vertical = 8.dp)
+                            ) {
+                                Text(
+                                    "${tr("Item", "वस्तु")} ${i + 1}: ${catLabel(g.info.category)}",
+                                    color = if (sel) Color(0xFF0B2A1D) else HomeText,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Photo, category and bin
+                DarkCard {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(modifier = Modifier.size(100.dp)) {
+                            Image(
+                                bitmap = item.bitmap.asImageBitmap(),
+                                contentDescription = null,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clip(RoundedCornerShape(18.dp)),
+                                contentScale = ContentScale.Crop
+                            )
+                            Row(
+                                modifier = Modifier
+                                    .align(Alignment.BottomStart)
+                                    .padding(6.dp)
+                                    .clip(RoundedCornerShape(50))
+                                    .background(Color(0xCC0B100E))
+                                    .padding(horizontal = 8.dp, vertical = 3.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon24("check", accent, 12.dp)
+                                Spacer(Modifier.width(3.dp))
+                                Text("$pct%", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        Spacer(Modifier.width(16.dp))
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(catLabel(info.category), color = HomeText, fontSize = 26.sp, fontWeight = FontWeight.Bold)
+                            if (item.key.isNotEmpty()) {
+                                Text(info.title, color = HomeMuted, fontSize = 14.sp)
+                            }
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(50))
+                                    .background(accent.copy(alpha = 0.18f))
+                                    .padding(horizontal = 12.dp, vertical = 7.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon24(categoryIcon(info.category), accent, 16.dp)
+                                Spacer(Modifier.width(7.dp))
+                                Text(binOf(info.category), color = accent, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                            if (!confident) {
+                                Text(tr("Not sure. Pick what it is below.", "पक्का नहीं। नीचे चुनें कि यह क्या है।"), color = HomeMuted, fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+
+                // Correct the guess. People know what an item is made of, not which category it is,
+                // so the options are everyday materials and the category follows from the choice.
+                DarkCard {
+                    Text(
+                        if (confident) tr("Wrong? Tell us what it is", "गलत है? बताइए यह क्या है")
+                        else tr("What is it made of?", "यह किससे बना है?"),
+                        color = HomeText, fontSize = 14.sp, fontWeight = FontWeight.SemiBold
+                    )
+                    val options = listOf(
+                        Triple(tr("Food or peels", "खाना या छिलके"), "Biodegradable", "organic"),
+                        Triple(tr("Paper or cardboard", "कागज़ या गत्ता"), "Recyclable", "paper_cardboard"),
+                        Triple(tr("Glass", "काँच"), "Recyclable", "glass"),
+                        Triple(tr("Metal", "धातु"), "Recyclable", "metal"),
+                        Triple(tr("Plastic bottle", "प्लास्टिक की बोतल"), "Recyclable", "plastic_bottle_container"),
+                        Triple(tr("Plastic wrapper", "प्लास्टिक का रैपर"), "Recyclable", "plastic_film"),
+                        Triple(tr("Electronics or battery", "इलेक्ट्रॉनिक या बैटरी"), "E-Waste", "ewaste"),
+                        Triple(tr("Medicine, bulb, chemical", "दवा, बल्ब, रसायन"), "Hazardous", "hazardous")
+                    )
+                    for (row in options.chunked(2)) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            for ((label, cat, key) in row) {
+                                Row(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .background(HomeSurface2)
+                                        .clickable { onCorrect(cat, key) }
+                                        .padding(horizontal = 12.dp, vertical = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(Modifier.size(8.dp).clip(CircleShape).background(boxColor(cat)))
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(label, color = HomeText, fontSize = 13.sp, lineHeight = 16.sp)
+                                }
+                            }
+                        }
+                    }
+
+                    // Something else: type it and ask the assistant, or choose the category yourself
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(320.dp),
-                        contentScale = ContentScale.Crop
-                    )
-                    if (group.size > 1) {
-                        LazyRow(
-                            modifier = Modifier
-                                .align(Alignment.BottomStart)
-                                .padding(12.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            itemsIndexed(group) { i, g ->
-                                val sel = g === item
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(if (otherOpen) HomeMint.copy(alpha = 0.18f) else HomeSurface2)
+                            .clickable { otherOpen = !otherOpen }
+                            .padding(horizontal = 12.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon24("info", HomeMint, 18.dp)
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            tr("Something else", "कुछ और"),
+                            color = HomeText, fontSize = 13.sp, fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                    if (otherOpen) {
+                        BasicTextField(
+                            value = otherText,
+                            onValueChange = { otherText = it },
+                            singleLine = true,
+                            textStyle = TextStyle(color = HomeText, fontSize = 15.sp),
+                            cursorBrush = SolidColor(HomeMint),
+                            modifier = Modifier.fillMaxWidth(),
+                            decorationBox = { inner ->
                                 Box(
                                     modifier = Modifier
-                                        .clip(RoundedCornerShape(50))
-                                        .background(if (sel) categoryColor(g.info.category) else Color(0x99000000))
-                                        .clickable { onPick(g) }
-                                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .background(HomeSurface2)
+                                        .border(1.dp, HomeOutline, RoundedCornerShape(14.dp))
+                                        .padding(14.dp)
+                                ) {
+                                    if (otherText.isEmpty()) {
+                                        Text(
+                                            tr("Type the item, for example: old toothbrush", "चीज़ का नाम लिखें, जैसे: पुराना टूथब्रश"),
+                                            color = HomeMuted, fontSize = 14.sp
+                                        )
+                                    }
+                                    inner()
+                                }
+                            }
+                        )
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(if (otherText.isBlank()) HomeSurface2 else HomeMint)
+                                .clickable { if (otherText.isNotBlank()) onOther(otherText.trim()) },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                tr("Ask the assistant", "सहायक से पूछें"),
+                                color = if (otherText.isBlank()) HomeMuted else Color(0xFF0B2A1D),
+                                fontSize = 14.sp, fontWeight = FontWeight.Bold
+                            )
+                        }
+                        Text(
+                            tr("Or choose the category yourself", "या खुद प्रकार चुनें"),
+                            color = HomeMuted, fontSize = 12.sp
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            for (cat in listOf("Biodegradable", "Recyclable", "E-Waste", "Hazardous")) {
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(boxColor(cat).copy(alpha = 0.2f))
+                                        .clickable { onCorrect(cat, "") }
+                                        .padding(vertical = 10.dp),
+                                    contentAlignment = Alignment.Center
                                 ) {
                                     Text(
-                                        "Item ${i + 1}: ${g.info.category}",
-                                        color = Color.White,
-                                        style = MaterialTheme.typography.labelMedium
+                                        catLabel(cat), color = boxColor(cat), fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold, maxLines = 1
                                     )
                                 }
                             }
                         }
                     }
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(120.dp)
-                            .background(Brush.verticalGradient(listOf(Color(0x99000000), Color.Transparent)))
+                }
+
+                if (SHOW_DEBUG) {
+                    Text(
+                        "Debug: ${item.result.label} (${pct}%) in ${item.result.millis} ms",
+                        color = HomeMuted, fontSize = 11.sp
                     )
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.TopStart)
-                            .statusBarsPadding()
-                            .padding(16.dp)
-                            .clip(RoundedCornerShape(50))
-                            .background(Color(0x66000000))
-                            .clickable { onBack() }
-                            .padding(horizontal = 14.dp, vertical = 8.dp)
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon24("back", Color.White, 18.dp)
-                            Spacer(Modifier.width(4.dp))
-                            Text("Back", color = Color.White, style = MaterialTheme.typography.labelLarge)
+                }
+
+                // Steps you can tick off
+                if (info.steps.isNotEmpty()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        SectionHeader("check", tr("What to do", "क्या करें"), HomeMint, tr("Tap a step to tick it", "स्टेप पर टैप करके टिक करें"))
+                        info.steps.forEachIndexed { i, step ->
+                            val isDone = done.getOrElse(i) { false }
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(18.dp))
+                                    .background(HomeSurface)
+                                    .border(1.dp, HomeOutline, RoundedCornerShape(18.dp))
+                                    .clickable { if (i < done.size) done[i] = !done[i] }
+                                    .padding(16.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(30.dp)
+                                        .clip(CircleShape)
+                                        .background(if (isDone) HomeMint else HomeSurface2),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    if (isDone) Icon24("check", Color(0xFF0B2A1D), 18.dp)
+                                    else Text("${i + 1}", color = HomeMuted, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                }
+                                Spacer(Modifier.width(14.dp))
+                                Text(
+                                    step,
+                                    color = if (isDone) HomeMuted else HomeText,
+                                    fontSize = 15.sp,
+                                    lineHeight = 22.sp
+                                )
+                            }
                         }
                     }
                 }
 
-                // Content, overlapping the photo with rounded top corners
-                Column(
-                    modifier = Modifier
-                        .offset(y = (-28).dp)
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
-                        .background(MaterialTheme.colorScheme.background)
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
-                ) {
-                    // Category header
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(20.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color.White),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(18.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(64.dp)
-                                    .clip(CircleShape)
-                                    .background(accent.copy(alpha = 0.14f)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon24(categoryIcon(info.category), accent, 34.dp)
-                            }
-                            Spacer(Modifier.width(16.dp))
-                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text(
-                                    "CATEGORY",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = Color(0xFF7A857E)
-                                )
-                                Text(
-                                    info.title,
-                                    style = MaterialTheme.typography.headlineSmall,
-                                    color = accent
-                                )
-                                Chip(
-                                    text = if (confident) "Confident match" else "Not sure",
-                                    color = if (confident) Color(0xFF1B6B43) else Color(0xFF6B7F73)
-                                )
-                                MatchBar(item.result.confidence, accent)
-                            }
+                if (info.dont.isNotEmpty()) {
+                    DarkCard {
+                        SectionHeader("cross", tr("Avoid", "क्या न करें"), Color(0xFFE57373))
+                        info.dont.forEach {
+                            Text("•  $it", color = HomeMuted, fontSize = 14.sp, lineHeight = 21.sp)
                         }
                     }
+                }
 
-                    // Let the user correct the guess; the advice below changes to match
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(20.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color.White),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-                    ) {
-                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Text(
-                                if (confident) "Not right? Pick the correct category"
-                                else "Not sure about this one. What is it?",
-                                style = MaterialTheme.typography.titleSmall
-                            )
-                            for (row in listOf(listOf("Biodegradable", "Recyclable"), listOf("E-Waste", "Hazardous"))) {
-                                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                    for (cat in row) {
-                                        val on = info.category == cat
-                                        Box(
-                                            modifier = Modifier
-                                                .weight(1f)
-                                                .clip(RoundedCornerShape(14.dp))
-                                                .background(if (on) categoryColor(cat) else categoryColor(cat).copy(alpha = 0.12f))
-                                                .clickable { onCorrect(cat) }
-                                                .padding(vertical = 12.dp),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                                Icon24(categoryIcon(cat), if (on) Color.White else categoryColor(cat), 18.dp)
-                                                Spacer(Modifier.width(6.dp))
-                                                Text(
-                                                    cat,
-                                                    color = if (on) Color.White else categoryColor(cat),
-                                                    style = MaterialTheme.typography.labelLarge
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                if (info.why.isNotEmpty()) {
+                    DarkCard {
+                        SectionHeader("globe", tr("Why it matters", "यह क्यों ज़रूरी है"), HomeMint)
+                        Text(info.why, color = HomeMuted, fontSize = 14.sp, lineHeight = 21.sp)
                     }
+                }
 
-                    if (SHOW_DEBUG) {
-                        Text(
-                            "Debug: ${item.result.label} (${(item.result.confidence * 100).toInt()}%) in ${item.result.millis} ms",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Color(0xFF7A857E)
+                if (info.tip.isNotEmpty()) {
+                    DarkCard {
+                        SectionHeader("bulb", tr("Tip", "सुझाव"), HomeMint)
+                        Text(info.tip, color = HomeMuted, fontSize = 14.sp, lineHeight = 21.sp)
+                    }
+                }
+
+                if (info.items.isNotEmpty() || info.journey.isNotEmpty()) {
+                    DarkCard {
+                        SectionHeader(
+                            "recycle",
+                            if (item.key.isNotEmpty()) tr("About ${info.title}", "${info.title} के बारे में")
+                            else tr("Common items", "आम चीज़ें"),
+                            HomeMint
                         )
-                    }
-
-                    InfoCard("check", "What to do", info.steps, numbered = true)
-                    InfoCard("cross", "Avoid", info.dont, numbered = false)
-                    if (info.why.isNotEmpty()) InfoCard("globe", "Why it matters", listOf(info.why), numbered = false)
-                    if (info.tip.isNotEmpty()) InfoCard("bulb", "Tip", listOf(info.tip), numbered = false)
-
-                    info.warning?.let {
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(18.dp),
-                            colors = CardDefaults.cardColors(containerColor = Color(0xFFDDEFE3))
-                        ) {
-                            Row(modifier = Modifier.padding(16.dp)) {
-                                Icon24("hazard", Color(0xFF14532D), 22.dp)
-                                Spacer(Modifier.width(10.dp))
-                                Text(it, color = Color(0xFF14532D), style = MaterialTheme.typography.bodyMedium)
+                        info.items.forEachIndexed { i, (name, tip) ->
+                            if (i > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(HomeOutline))
+                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(name, color = HomeText, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                                Text(tip, color = HomeMuted, fontSize = 13.sp, lineHeight = 19.sp)
                             }
                         }
+                        if (info.journey.isNotEmpty()) {
+                            Box(Modifier.fillMaxWidth().height(1.dp).background(HomeOutline))
+                            Text(
+                                tr("What happens next", "इसके बाद क्या होता है"),
+                                color = HomeMint, fontSize = 13.sp, fontWeight = FontWeight.Bold
+                            )
+                            Text(info.journey, color = HomeMuted, fontSize = 13.sp, lineHeight = 19.sp)
+                        }
+                    }
+                }
+
+                info.warning?.let {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(Color(0x22FFB300))
+                            .border(1.dp, Color(0x55FFB300), RoundedCornerShape(20.dp))
+                            .padding(16.dp)
+                    ) {
+                        Icon24("hazard", Color(0xFFFFB300), 22.dp)
+                        Spacer(Modifier.width(12.dp))
+                        Text(it, color = Color(0xFFFFE0A3), fontSize = 14.sp, lineHeight = 21.sp)
                     }
                 }
 
                 // Space so the last card is not hidden behind the bottom bar
-                Spacer(Modifier.height(96.dp))
+                Spacer(Modifier.height(100.dp))
             }
 
             // Bottom action bar
-            Surface(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth(),
-                color = Color.White,
-                shadowElevation = 12.dp
-            ) {
-                Row(
-                    modifier = Modifier
-                        .navigationBarsPadding()
-                        .padding(16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    OutlinedButton(
-                        onClick = onScanAnother,
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(52.dp),
-                        shape = RoundedCornerShape(16.dp)
-                    ) { Text("Scan another") }
-                    Button(
-                        onClick = onAsk,
-                        modifier = Modifier
-                            .weight(1.4f)
-                            .height(52.dp),
-                        shape = RoundedCornerShape(16.dp)
-                    ) { Text("Ask about this item") }
-                }
-            }
-        }
-    }
-
-    @Composable
-    private fun MatchBar(value: Float, color: Color) {
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(
-                "Match strength",
-                style = MaterialTheme.typography.labelSmall,
-                color = Color(0xFF7A857E)
-            )
             Box(
                 modifier = Modifier
+                    .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .height(8.dp)
-                    .clip(RoundedCornerShape(50))
-                    .background(color.copy(alpha = 0.15f))
+                    .background(Brush.verticalGradient(listOf(Color.Transparent, HomeBg, HomeBg)))
+                    .navigationBarsPadding()
+                    .padding(horizontal = 18.dp)
+                    .padding(top = 26.dp, bottom = 14.dp)
             ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(value.coerceIn(0.03f, 1f))
-                        .height(8.dp)
-                        .clip(RoundedCornerShape(50))
-                        .background(color)
-                )
-            }
-        }
-    }
-
-    @Composable
-    private fun InfoCard(icon: String, title: String, lines: List<String>, numbered: Boolean) {
-        if (lines.isEmpty()) return
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(18.dp),
-            colors = CardDefaults.cardColors(containerColor = Color.White),
-            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-        ) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon24(icon, Color(0xFF1B6B43), 20.dp)
-                    Spacer(Modifier.width(8.dp))
-                    Text(title, style = MaterialTheme.typography.titleMedium)
-                }
-                lines.forEachIndexed { index, line ->
-                    val prefix = when {
-                        lines.size == 1 -> ""
-                        numbered -> "${index + 1}.  "
-                        else -> "•  "
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(54.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(HomeSurface)
+                            .border(1.dp, HomeOutline, RoundedCornerShape(16.dp))
+                            .clickable { onScanAnother() },
+                        contentAlignment = Alignment.Center
+                    ) { Text(tr("Scan another", "दोबारा स्कैन करें"), color = HomeText, fontSize = 15.sp, fontWeight = FontWeight.SemiBold) }
+                    Box(
+                        modifier = Modifier
+                            .weight(1.4f)
+                            .height(54.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(HomeMint)
+                            .clickable { onAsk() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon24("chat", Color(0xFF0B2A1D), 20.dp)
+                            Spacer(Modifier.width(8.dp))
+                            Text(tr("Ask about this", "इसके बारे में पूछें"), color = Color(0xFF0B2A1D), fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
-                    Text(prefix + line, style = MaterialTheme.typography.bodyMedium, color = Color(0xFF2B332E))
                 }
             }
         }

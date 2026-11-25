@@ -129,8 +129,8 @@ fun DetectionOverlay(frame: DetFrame, modifier: Modifier = Modifier.fillMaxSize(
             val h = (b.bottom - b.top) * scale
             drawRoundRect(c, Offset(x, y), Size(w, h), CornerRadius(10.dp.toPx()), style = Stroke(3.dp.toPx()))
 
-            val label = if (b.category == "Unsure") "Not sure"
-            else "${b.category}  ${(b.confidence * 100).toInt()}%"
+            val label = if (b.category == "Unsure") tr("Not sure", "पक्का नहीं")
+            else "${catLabel(b.category)}  ${(b.confidence * 100).toInt()}%"
             val tw = paint.measureText(label)
             val padH = 8.dp.toPx()
             val lh = 22.dp.toPx()

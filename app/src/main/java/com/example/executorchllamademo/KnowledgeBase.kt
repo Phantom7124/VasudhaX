@@ -10,18 +10,37 @@ data class WasteInfo(
     val dont: List<String>,
     val why: String,
     val tip: String,
-    val warning: String?
+    val warning: String?,
+    val journey: String = "",
+    val items: List<Pair<String, String>> = emptyList()
 )
 
-/** Reads knowledge_base.json from assets and returns the entry for a class name. */
+/**
+ * Reads the advice from assets: knowledge_base.json (English) or knowledge_base_hi.json (Hindi),
+ * depending on the language chosen in the app.
+ */
 object KnowledgeBase {
-    private var root: JSONObject? = null
+    private var rootEn: JSONObject? = null
+    private var rootHi: JSONObject? = null
+
+    private fun read(context: Context, file: String): JSONObject =
+        JSONObject(context.assets.open(file).bufferedReader().use { it.readText() })
+
+    private fun root(context: Context): JSONObject {
+        if (Lang.hindi) {
+            val cached = rootHi
+            if (cached != null) return cached
+            try {
+                return read(context, "knowledge_base_hi.json").also { rootHi = it }
+            } catch (e: Exception) {
+                // no Hindi file: fall back to English
+            }
+        }
+        return rootEn ?: read(context, "knowledge_base.json").also { rootEn = it }
+    }
 
     fun get(context: Context, key: String): WasteInfo {
-        val data = root ?: JSONObject(
-            context.assets.open("knowledge_base.json").bufferedReader().use { it.readText() }
-        ).also { root = it }
-
+        val data = root(context)
         val o = data.optJSONObject(key) ?: data.getJSONObject("unsure")
 
         fun list(name: String): List<String> {
@@ -36,7 +55,14 @@ object KnowledgeBase {
             dont = list("dont"),
             why = o.optString("why"),
             tip = o.optString("tip"),
-            warning = if (o.has("warning")) o.getString("warning") else null
+            warning = if (o.has("warning")) o.getString("warning") else null,
+            journey = o.optString("journey"),
+            items = o.optJSONArray("items")?.let { arr ->
+                List(arr.length()) { i ->
+                    val x = arr.getJSONObject(i)
+                    Pair(x.optString("name"), x.optString("tip"))
+                }
+            } ?: emptyList()
         )
     }
 }
